@@ -226,5 +226,63 @@ class HardwareEnvsTest(unittest.TestCase):
                              [{"env": "board_a", "board": "esp32-s3-devkitc-1"}])
 
 
+CLAWD_ENV_FLAG = '-DCLAWD_ENV=\\"${this.__env__}\\"'
+
+
+def env_name_problems(ini_path: Path) -> list[str]:
+    """Hardware envs whose image would not report its own env name.
+
+    The app trusts `info`'s env (CLAWD_ENV) to pick the image and to confirm
+    a flash. PlatformIO expands `${this.__env__}` in the env whose option it
+    is, so a variant that copies `${env:<parent>.build_flags}` reports the
+    parent's name. A variant must inherit build_flags through `extends` and
+    put its own -D flags in the parent's `variant_flags` hook instead.
+    """
+    import hardware_envs
+    envs = dict(hardware_envs.read_envs(ini_path))
+    problems = []
+    for name, opts in envs.items():
+        if hardware_envs.is_native(opts):
+            continue
+        # Walk `extends` to the env whose build_flags this one uses.
+        owner, seen = name, set()
+        while "build_flags" not in envs.get(owner, {}) and "extends" in envs.get(owner, {}):
+            seen.add(owner)
+            owner = envs[owner]["extends"].strip().removeprefix("env:")
+            if owner in seen or owner not in envs:
+                break
+        flags = envs.get(owner, {}).get("build_flags", "")
+        if "${env:" in flags and ".build_flags}" in flags:
+            problems.append(f"{name}: build_flags copies another env's build_flags")
+        elif CLAWD_ENV_FLAG not in flags:
+            problems.append(f"{name}: no {CLAWD_ENV_FLAG} in {owner}'s build_flags")
+        if owner != name and "variant_flags" in opts and "${this.variant_flags}" not in flags:
+            problems.append(f"{name}: sets variant_flags but {owner}'s build_flags never uses them")
+    return problems
+
+
+class EnvNameTest(unittest.TestCase):
+    def test_every_hardware_env_reports_its_own_name(self):
+        self.assertEqual(env_name_problems(REPO / "firmware" / "platformio.ini"), [])
+
+    def test_a_variant_copying_its_parents_flags_is_caught(self):
+        parent = ("[env:board]\nplatform = https://x/p.zip\nvariant_flags =\nbuild_flags =\n"
+                  f"    {CLAWD_ENV_FLAG}\n    -DA=1\n    ${{this.variant_flags}}\n\n")
+        good = "[env:board_rot]\nextends = env:board\nvariant_flags = -DROT\n"
+        bad = ("[env:board_rot]\nextends = env:board\nbuild_flags =\n"
+               "    ${env:board.build_flags}\n    -DROT\n")
+        unused = "[env:board_rot]\nextends = env:board\nvariant_flags = -DROT\n"
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "platformio.ini"
+            p.write_text(parent + good)
+            self.assertEqual(env_name_problems(p), [])
+            p.write_text(parent + bad)
+            self.assertEqual(env_name_problems(p),
+                             ["board_rot: build_flags copies another env's build_flags"])
+            p.write_text(parent.replace("    ${this.variant_flags}\n", "") + unused)
+            self.assertEqual(env_name_problems(p),
+                             ["board_rot: sets variant_flags but board's build_flags never uses them"])
+
+
 if __name__ == "__main__":
     unittest.main()

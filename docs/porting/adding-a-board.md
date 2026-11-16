@@ -42,6 +42,13 @@ the corresponding capabilities accurately.
    exclude `boards/`, then include only your board folder. Set the identity
    and `CLAWD_ENV` definitions using the existing environments as examples.
    Choose flash size, partitions, and PSRAM settings from the actual hardware.
+   A variant of an existing board built from the same folder (a rotation,
+   a sibling with a different touch controller) is an env with only
+   `extends = env:<parent>` and `variant_flags = -D…`: the parent ends its
+   `build_flags` with `${this.variant_flags}` and declares an empty
+   `variant_flags =`. Never copy `${env:<parent>.build_flags}`: it expands
+   `CLAWD_ENV` as the parent, so the image reports the wrong env and the
+   app's post-flash check fails. `tools/ci/tests` checks this.
 5. Build with `pio run -d firmware -e my_board`. Resolve missing or duplicate
    HAL symbols before flashing.
 6. Flash the target and inspect startup diagnostics. The device should boot
@@ -135,6 +142,7 @@ human-involvement notes.
 | Incorrect touch position | Apply coordinate swap and mirroring in `touch.cpp`. Read the controller in one place so competing I2C reads cannot consume the same event. |
 | RGB tearing or crash | Follow the LCD-4 bounce-buffer setup. Do not create a second RGB panel by calling `getFrameBuffer()` after initialization. |
 | Battery brownout on LCD-1.54 | Drive its power-hold line HIGH early in board initialization. |
+| App says a variant "reports <parent> firmware" after flashing | The variant copies `${env:<parent>.build_flags}`; use `variant_flags` (step 4). |
 | Wrong implementation linked | Check `build_src_filter` order: exclude all board folders, then include exactly one. |
 | Text clipped or overlapping | Add the panel to `test_layout`'s `PANELS`; the failure names the element. Fix it with a shape rule in `layout.cpp`, not a board check. |
 
